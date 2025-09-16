@@ -22,10 +22,9 @@
 <summary><b>✨ Próximamente</b></summary>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/HTML5-e34f26?logo=html5&logoColor=white&style=flat-square" alt="HTML5" />
-  <img src="https://img.shields.io/badge/CSS3-1572B6?logo=css3&logoColor=white&style=flat-square" alt="CSS3" />
+  <img src="https://img.shields.io/badge/HTML5-e34f26?logo=html5&logoColor=white&style=flat-square" alt="HTML" />
+  <img src="https://img.shields.io/badge/CSS3-1572B6?logo=css3&logoColor=white&style=flat-square" alt="CSS" />
   <img src="https://img.shields.io/badge/JavaScript-F7DF1E?logo=javascript&logoColor=black&style=flat-square" alt="JavaScript" />
-  <img src="https://img.shields.io/badge/Git-F05032?logo=git&logoColor=white&style=flat-square" alt="Git" />
 </p>
 </details>
 
@@ -33,17 +32,14 @@
 
 ## 🎯 En qué estoy trabajando
 - 🔭 Practicando algoritmos y estructuras de datos para fortalecer la lógica.
-- 🧪 Construyendo mini proyectos web para aprender buenas prácticas desde el inicio.
-- 🤝 Participando en comunidades tech para colaborar y seguir creciendo.
-
+- 🧪 Construyendo mini proyectos.
 ---
 
 ## 🎮 Hobbies e intereses
 <p>
-  <strong>🎮 Videojuegos:</strong> fan de los juegos cooperativos y las buenas historias.<br/>
-  <strong>📚 Libros:</strong> desde novelas de ciencia ficción hasta ensayos sobre tecnología.<br/>
-  <strong>🎶 Música:</strong> siempre acompañado de playlists lo-fi y rock alternativo.<br/>
-  <strong>🍿 Anime:</strong> me inspiro con historias que mezclan creatividad y emoción.
+  <strong>🎮 Videojuegos:</strong> fan de los juegos y las buenas historias.<br/>
+  <strong>📚 Libros:</strong> desde mangas hasta cosas sobre tecnología.<br/>
+  <strong>🎶 Música:</strong> siempre acompañado de playlists de rock <br/>
 </p>
 
 ---
