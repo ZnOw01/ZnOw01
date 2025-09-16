@@ -4,7 +4,6 @@
 <p align="center">
   🎓 Estudiante de Ingeniería Informática en la UNT <br/>
   🌱 Aprendiendo cada día más sobre programación<br/>
-  🚀 Futuro creador de una startup o desarrollador en una Big Tech
 </p>
 
 ---
