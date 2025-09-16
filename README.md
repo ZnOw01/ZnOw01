@@ -2,14 +2,9 @@
 <h1 align="center">¡Hola! 👋 Soy <span style="color:#6C63FF;">ZnOw01</span></h1>
 
 <p align="center">
-  🎓 Estudiante de Ingeniería Informática en la Universidad Nacional de Trujillo (Perú)<br/>
-  🌱 Aprendiendo cada día más sobre programación y desarrollo web<br/>
+  🎓 Estudiante de Ingeniería Informática en la UNT <br/>
+  🌱 Aprendiendo cada día más sobre programación<br/>
   🚀 Futuro creador de una startup o desarrollador en una Big Tech
-</p>
-
-<p align="center">
-  <a href="mailto:zn.ow01.dev@gmail.com"><img src="https://img.shields.io/badge/Contacto-zn.ow01.dev%40gmail.com-6C63FF?style=for-the-badge&logo=gmail&logoColor=white" alt="Email" /></a>
-  <a href="https://www.linkedin.com/in/znOw01" target="_blank"><img src="https://img.shields.io/badge/LinkedIn-Conectemos!-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white" alt="LinkedIn" /></a>
 </p>
 
 ---
