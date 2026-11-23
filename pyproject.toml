@@ -1,0 +1,33 @@
+[project]
+name = "znow01-profile"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+  "pillow>=11,<14",
+  "fonttools[woff]>=4.55,<5",
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "BLE", "EXE", "FURB", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.basedpyright]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+extraPaths = ["scripts"]
