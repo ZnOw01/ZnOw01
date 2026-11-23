@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fontTools import subset
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageStat
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
@@ -203,71 +203,104 @@ def esc(s: str) -> str:
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("'", "&#39;")
 
 
-# ── portrait: Bayer dither that dissolves into ASCII ─────────────────────
-def portrait(avatar_url: str, size: int = 380, scale: int = 2) -> str:
+# ── portrait ─────────────────────────────────────────────────────────────
+# Source: assets/portrait.(png|jpg|jpeg|webp) if present, else the live GitHub
+# avatar. Prep is image-agnostic: centre square crop, auto levels and an
+# adaptive gamma that pushes mean brightness to a fixed target, so any photo
+# lands in the same tonal range before dithering.
+PORTRAIT_STYLE = "atkinson"   # "atkinson" | "glyphs" | "band"
+
+
+def _portrait_source(avatar_url: str) -> Image.Image:
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        f = ASSETS / f"portrait.{ext}"
+        if f.exists():
+            return Image.open(f)
     cache = ASSETS / "avatar.jpg"
     try:
         with urllib.request.urlopen(avatar_url + "&s=460", timeout=30) as r:
             cache.write_bytes(r.read())
     except Exception:
         pass  # keep the cached copy
-    src = Image.open(cache).convert("L")
-    w, h = src.size
-    # tighter crop on the face (avatar subject sits centre-right)
-    src = src.crop((int(w * 0.08), int(h * 0.04), int(w * 0.96), int(h * 0.92)))
-    src = ImageOps.autocontrast(src, cutoff=1)
-    # lift midtones so skin reads as paper and only hair/lines carry ink
-    lut = [int(255 * ((i / 255) ** 0.5)) for i in range(256)]
-    src = src.point(lut)
-    src = src.filter(ImageFilter.UnsharpMask(radius=2, percent=160, threshold=2))
+    return Image.open(cache)
 
+
+def _prep(im: Image.Image, n: int) -> Image.Image:
+    import math
+    if im.mode in ("RGBA", "LA", "P"):
+        im = im.convert("RGBA")
+        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
+        im = Image.alpha_composite(bg, im)
+    im = im.convert("L")
+    w, h = im.size
+    s = min(w, h)
+    im = im.crop(((w - s) // 2, (h - s) // 2, (w + s) // 2, (h + s) // 2))
+    im = ImageOps.autocontrast(im, cutoff=1)
+    mean = ImageStat.Stat(im).mean[0] / 255
+    g = math.log(0.62) / math.log(max(0.05, min(0.95, mean)))
+    im = im.point([int(255 * ((i / 255) ** g)) for i in range(256)])
+    im = im.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=2))
+    return im.resize((n, n), Image.LANCZOS)
+
+
+def _atkinson(g: Image.Image) -> list[list[bool]]:
+    n = g.size[0]
+    a = [[float(g.getpixel((x, y))) for x in range(n)] for y in range(n)]
+    ink = [[False] * n for _ in range(n)]
+    for y in range(n):
+        for x in range(n):
+            old = a[y][x]
+            new = 0.0 if old < 128 else 255.0
+            ink[y][x] = new == 0
+            e = (old - new) / 8
+            for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)):
+                X, Y = x + dx, y + dy
+                if 0 <= X < n and Y < n:
+                    a[Y][X] += e
+    return ink
+
+
+def portrait(avatar_url: str, size: int = 380, scale: int = 2) -> str:
     W = size * scale
     ink = (0x12, 0x1A, 0x18)
     paper = (0xB7, 0xD8, 0xCD)
+    raw = _portrait_source(avatar_url)
     out = Image.new("RGB", (W, W), paper)
     d = ImageDraw.Draw(out)
 
-    px_cell = 3 * scale            # dither pixel
-    n = W // px_cell
-    dith = src.resize((n, n), Image.LANCZOS).load()
-
-    ch_cell = 10 * scale           # ascii cell
-    m = W // ch_cell
-    asc = src.resize((m, m), Image.LANCZOS).load()
-    font = ImageFont.truetype(str(FONTS / "JetBrainsMono-Bold.ttf"), int(ch_cell * 1.12))
-
-    # ragged boundary: each ascii row starts at a slightly different column
-    rng = random.Random(USER)
-    split = []
-    # ascii eats the hair on the left; the face stays in dither
-    base = int(m * 0.26)
-    for r in range(m):
-        base += rng.choice((-1, 0, 0, 1))
-        base = max(int(m * 0.18), min(int(m * 0.32), base))
-        split.append(base)
-
+    cell = 5 * scale // 2            # 5px dither dot at 2x
+    n = W // cell
+    dots = _atkinson(_prep(raw, n))
     for y in range(n):
         for x in range(n):
-            ar = min(m - 1, (y * px_cell) // ch_cell)
-            if (x * px_cell) // ch_cell < split[ar]:
-                continue
-            t = (BAYER8[y % 8][x % 8] + 0.5) / 64 * 255
-            if dith[x, y] < t:
-                d.rectangle([x * px_cell, y * px_cell, (x + 1) * px_cell - 1, (y + 1) * px_cell - 1], fill=ink)
+            if dots[y][x]:
+                d.rectangle([x * cell, y * cell, (x + 1) * cell - 1, (y + 1) * cell - 1], fill=ink)
 
-    for r in range(m):
-        for c in range(0, split[r]):
-            v = 1 - asc[c, r] / 255          # darkness 0..1
-            ch = RAMP[min(len(RAMP) - 1, int(v * len(RAMP)))]
-            if ch == " ":
-                continue
-            cx, cy = c * ch_cell + ch_cell / 2, r * ch_cell + ch_cell / 2
-            d.text((cx, cy), ch, font=font, fill=ink, anchor="mm")
-        # a pixel or two of debris across the seam, like a half-finished scan
-        for _ in range(rng.randint(0, 2)):
-            c = split[r] + rng.randint(0, 3)
-            if c < m:
-                d.rectangle([c * ch_cell + scale, r * ch_cell + scale, c * ch_cell + 3 * scale, r * ch_cell + 3 * scale], fill=ink)
+    if PORTRAIT_STYLE in ("glyphs", "band"):
+        ach = 12 * scale // 2 if PORTRAIT_STYLE == "glyphs" else 14 * scale // 2
+        m = W // ach
+        g = _prep(raw, m).load()
+        font = ImageFont.truetype(str(FONTS / "JetBrainsMono-ExtraBold.ttf"), int(ach * 1.1))
+        rng = random.Random(USER)
+        edge = int(m * 0.22)
+        for r in range(m):
+            if PORTRAIT_STYLE == "glyphs":
+                # solid shadow masses are carved into characters
+                for c in range(m):
+                    v = 1 - g[c, r] / 255
+                    if v > 0.66:
+                        x0, y0 = c * ach, r * ach
+                        d.rectangle([x0, y0, x0 + ach - 1, y0 + ach - 1], fill=ink)
+                        d.text((x0 + ach / 2, y0 + ach / 2), "+*#%"[min(3, int((v - .66) / .34 * 4))],
+                               font=font, fill=paper, anchor="mm")
+            else:
+                # a ragged band on the left dissolves into ASCII
+                edge = max(int(m * 0.12), min(int(m * 0.30), edge + rng.choice((-1, 0, 0, 1))))
+                d.rectangle([0, r * ach, edge * ach - 1, (r + 1) * ach - 1], fill=paper)
+                for c in range(edge):
+                    ch = RAMP[min(len(RAMP) - 1, int((1 - g[c, r] / 255) * len(RAMP)))]
+                    if ch != " ":
+                        d.text((c * ach + ach / 2, r * ach + ach / 2), ch, font=font, fill=ink, anchor="mm")
 
     out = out.quantize(colors=4)
     buf = io.BytesIO()
