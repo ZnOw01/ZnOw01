@@ -336,7 +336,7 @@ def card(data: dict) -> str:
     RX0, RX1 = PX1, W - P
     BOT = TOP + PH                # 452
 
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     bio = data["bio"] or "MMMMMmmmmm..."
     if len(bio) > 26:
         bio = bio[:25] + "…"
