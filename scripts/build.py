@@ -14,6 +14,7 @@ import io
 import json
 import os
 import random
+import re
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -34,13 +35,37 @@ INK = "#121A18"     # print ink
 INK_SOFT = "#3E5852"
 PUMPKIN = "#E4572E"  # the one accent
 
-FEATURED = {
-    "Primrose": "Experimental Nintendo Switch 2 emulator. Fork of Eglantine.",
-    "Pomegranate": "Experimental Nintendo Switch 2 emulator. Fork of Lichii.",
-    "Ryliox": "Your O'Reilly Learning library, yours to keep. Export any book to EPUB 3 or PDF.",
-    "Veilleuse": "Native Omarchy bar widget for brightness, night light and day/night schedules.",
-    "nupFZ": "NUP: a clean-room container format for unencrypted NX (Switch 1/2) game dumps.",
-    "PS5Flake": "PlayStation 5 emulator for Windows, Linux and macOS.",
+# Everything below is the owner's own words. Repos, languages and tools are
+# NOT listed here: they are discovered from the GitHub API on every run.
+PROFILE = {
+    "role": "CS STUDENT",
+    "mode": "BUILD · BREAK · LEARN",
+    "reading": "CODE · LANGUAGES · TOOLS · LINUX",
+    "tagline": "Always building things, breaking things and learning a bit more every day.",
+}
+NOW = [
+    ("BUILDING", ["New projects"]),
+    ("READING ABOUT", ["Programming", "Programming languages", "Tools", "Linux"]),
+]
+OFFLINE = [
+    ("VIDEO GAMES", []),
+    ("BOOKS", ["Programming", "Classic literature"]),
+    ("LEARNING", ["English"]),
+]
+
+# file or directory name (at depth <= 2 of a repo) -> tool it reveals
+TOOL_MARKERS = {
+    "Dockerfile": "Docker", "docker-compose.yml": "Docker", "compose.yaml": "Docker",
+    "uv.lock": "uv", "requirements.txt": "pip",
+    "bun.lock": "Bun", "bun.lockb": "Bun", "package-lock.json": "npm", "pnpm-lock.yaml": "pnpm",
+    "CMakeLists.txt": "CMake", "meson.build": "Meson", "Makefile": "Make", "Cargo.toml": "Cargo",
+    "go.mod": "Go modules", "flake.nix": "Nix", "vcpkg.json": "vcpkg",
+    "astro.config.mjs": "Astro", "astro.config.ts": "Astro", "vite.config.ts": "Vite",
+    "vitest.config.ts": "Vitest", "vitest.config.mts": "Vitest", "tailwind.config.js": "Tailwind",
+    "components.json": "shadcn/ui", "conftest.py": "pytest", "pytest.ini": "pytest",
+    ".github/workflows": "GitHub Actions", ".pre-commit-config.yaml": "pre-commit",
+    "ruff.toml": "Ruff", ".prettierrc": "Prettier", "eslint.config.js": "ESLint",
+    "Doxyfile": "Doxygen", ".clang-format": "clang-format", "manifest.json": None,
 }
 
 BAYER8 = [
@@ -83,10 +108,26 @@ def fetch() -> dict:
     gql = _req("https://api.github.com/graphql", {"query": q, "variables": {"login": USER}})
     cal = gql["data"]["user"]["contributionsCollection"]["contributionCalendar"]
     weeks = [sum(d["contributionCount"] for d in w["contributionDays"]) for w in cal["weeks"]]
-    langs: dict[str, int] = {}
+    repos = [r for r in repos if r["name"] != USER and not r.get("private")]
+    lang_repos: dict[str, int] = {}
+    lang_bytes: dict[str, int] = {}
+    tools: dict[str, int] = {}
     for r in repos:
-        if r.get("language"):
-            langs[r["language"]] = langs.get(r["language"], 0) + 1
+        full = _req(f"https://api.github.com/repos/{USER}/{r['name']}")
+        r["parent"] = (full.get("parent") or {}).get("full_name")
+        lb = _req(f"https://api.github.com/repos/{USER}/{r['name']}/languages")
+        total = sum(lb.values()) or 1
+        # a language counts for a repo when it is at least 2% of its code
+        r["langs"] = [k for k, v in sorted(lb.items(), key=lambda kv: -kv[1]) if v / total >= 0.02]
+        for k in r["langs"]:
+            lang_repos[k] = lang_repos.get(k, 0) + 1
+            lang_bytes[k] = lang_bytes.get(k, 0) + lb[k]
+        r["tools"] = sorted(repo_tools(r["name"], r["default_branch"]))
+        for t in r["tools"]:
+            tools[t] = tools.get(t, 0) + 1
+        if not r.get("description"):
+            r["description"] = readme_tagline(r["name"])
+    langs = sorted(lang_repos, key=lambda k: (-lang_repos[k], -lang_bytes[k]))
     return {
         "name": user.get("name") or USER,
         "bio": (user.get("bio") or "").strip(),
@@ -96,9 +137,50 @@ def fetch() -> dict:
         "stars": sum(r["stargazers_count"] for r in repos),
         "contrib": cal["totalContributions"],
         "weeks": weeks[-52:],
-        "langs": [k for k, _ in sorted(langs.items(), key=lambda kv: -kv[1])][:3],
-        "repo_map": {r["name"]: r for r in repos},
+        "langs": [(k, lang_repos[k]) for k in langs],
+        "tools": sorted(tools.items(), key=lambda kv: (-kv[1], kv[0].lower())),
+        "repos_list": sorted(repos, key=lambda r: (bool(r.get("fork")), -_ts(r["pushed_at"]))),
     }
+
+
+def _ts(iso: str) -> float:
+    return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+
+
+def repo_tools(name: str, branch: str) -> set[str]:
+    try:
+        tree = _req(f"https://api.github.com/repos/{USER}/{name}/git/trees/{branch}?recursive=1")
+    except Exception:
+        return set()
+    found = set()
+    for e in tree.get("tree", []):
+        path = e["path"]
+        parts = path.split("/")
+        if len(parts) > 2:
+            continue
+        for key in (path, parts[-1]):
+            tool = TOOL_MARKERS.get(key)
+            if tool:
+                found.add(tool)
+    return found
+
+
+def readme_tagline(name: str) -> str:
+    """First plain sentence of a repo README, used only when it has no description."""
+    try:
+        raw = _req(f"https://api.github.com/repos/{USER}/{name}/readme")
+        text = base64.b64decode(raw["content"]).decode("utf-8", "replace")
+    except Exception:
+        return ""
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s.startswith(("#", "<", "[", "!", "|", "```", ">", "-", "*  ")):
+            continue
+        s = re.sub(r"[*_`]|<br\s*/?>", "", s)
+        s = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", s).strip()
+        if len(s) > 12:
+            return s
+    return ""
 
 
 # ── fonts: subset + embed so the SVG renders the same everywhere ─────────
@@ -229,10 +311,10 @@ def card(data: dict) -> str:
     rows = [
         ("HANDLE", USER),
         ("ALIAS", data["name"]),
-        ("FUNCTION", "EMULATORS / TOOLING"),
-        ("CURRENT", "SWITCH 2 EMULATION"),
-        ("STACK", " · ".join(l.upper() for l in data["langs"]) or "C++"),
-        ("HABITAT", "ARCH · OMARCHY"),
+        ("ROLE", PROFILE["role"]),
+        ("MODE", PROFILE["mode"]),
+        ("STACK", " · ".join(k.upper() for k, _ in data["langs"][:3])),
+        ("READING", PROFILE["reading"]),
         ("SIGNAL", bio),
     ]
     stats = [
@@ -247,7 +329,7 @@ def card(data: dict) -> str:
     peak = max(range(len(data["weeks"][-act_cols:])), key=lambda i: data["weeks"][-act_cols:][i])
 
     text_all = "".join(a + b for a, b in rows) + "".join(k + str(v) for k, v in stats)
-    text_all += "".join(act) + now + bio + "SUBJECT//ZNOW01PUMPKIN.SYSACTIVITY52WEEKSPEAKLASTSYNCREGENERATEDDAILY·[]_>0123456789/:-"
+    text_all += "".join(act) + now + bio + "SUBJECT//ZNOW01PUMPKIN.SYSACTIVITY52WEEKSPEAKLASTSYNCREGENERATEDDAILYAUTOSYNCEDHOURLY·[]_>0123456789/:-"
     style = (
         font_face("JBM", "JetBrainsMono-Regular.ttf", text_all)
         + font_face("JBMB", "JetBrainsMono-Bold.ttf", text_all)
@@ -350,7 +432,7 @@ def card(data: dict) -> str:
     a(f'<line x1="{ax0}" y1="{BOT + 50 + act_rows * 14 - 6}" x2="{ax1}" y2="{BOT + 50 + act_rows * 14 - 6}" class="hair"/>')
 
     # footer
-    a(f'<text x="{P + 20}" y="{H - P - 12}" class="t" font-size="11.5" letter-spacing="1.2">&gt; LAST SYNC {now} · REGENERATED DAILY</text>')
+    a(f'<text x="{P + 20}" y="{H - P - 12}" class="t" font-size="11.5" letter-spacing="1.2">&gt; LAST SYNC {now} · AUTO-SYNCED HOURLY</text>')
     a(f'<text x="{W - P - 20}" y="{H - P - 12}" class="t" font-size="11.5" letter-spacing="1.2" text-anchor="end">github.com/{USER}</text>')
     a("</svg>")
     return "\n".join(s)
@@ -380,14 +462,21 @@ def ago(iso: str) -> str:
     return f"{days // 30}MO AGO"
 
 
-def tile(name: str, desc: str, repo: dict, idx: int) -> str:
+def tile(repo: dict, idx: int) -> str:
     W, H = 460, 168
-    lines = wrap(desc, 46)[:2]
-    lang = (repo.get("language") or "SPEC").upper()
+    name = repo["name"]
+    desc = repo.get("description") or ""
+    lines = wrap(desc, 46)
+    if len(lines) > 2:
+        lines = lines[:2]
+        lines[1] = lines[1][:43].rstrip(" .,;:") + "…"
+    lang = " · ".join(l.upper() for l in repo.get("langs", [])[:3]) or "—"
     stars = repo.get("stargazers_count", 0)
     upd = ago(repo["pushed_at"])
-    tag = "FORK" if repo.get("fork") else "ORIGINAL"
-    text = name.upper() + name + desc + lang + str(stars) + upd + tag + "★·/0123456789FILE"
+    tag = f"FORK OF {repo['parent']}" if repo.get("fork") and repo.get("parent") else ("FORK" if repo.get("fork") else "ORIGINAL")
+    if len(tag) > 56:
+        tag = tag[:55] + "…"
+    text = name.upper() + name + desc + lang + str(stars) + upd + tag + "★·/0123456789…—"
     style = (font_face("JBM", "JetBrainsMono-Regular.ttf", text)
              + font_face("JBMB", "JetBrainsMono-Bold.ttf", text)
              + font_face("JBMX", "JetBrainsMono-ExtraBold.ttf", text))
@@ -405,10 +494,10 @@ def tile(name: str, desc: str, repo: dict, idx: int) -> str:
          f'<rect x="10" y="10" width="{W - 20}" height="{H - 20}" fill="none" stroke="{INK}" stroke-width="1.5"/>',
          f'<g fill="{INK}">{"".join(stripe)}</g>',
          f'<line x1="26" y1="10" x2="26" y2="{H - 10}" stroke="{INK}" stroke-width="1.5"/>',
-         f'<text x="42" y="46" class="x" font-size="24" letter-spacing=".5">{esc(name)}</text>',
-         f'<text x="{W - 26}" y="44" class="b" font-size="11" letter-spacing="1.5" text-anchor="end" style="fill:{PUMPKIN if tag == "ORIGINAL" else INK_SOFT}">{tag}</text>']
+         f'<text x="42" y="34" class="b" font-size="10.5" letter-spacing="1.3" style="fill:{PUMPKIN if tag == "ORIGINAL" else INK_SOFT}">{esc(tag)}</text>',
+         f'<text x="42" y="60" class="x" font-size="{24 if len(name) <= 16 else 20}" letter-spacing=".5">{esc(name)}</text>']
     for i, ln in enumerate(lines):
-        s.append(f'<text x="42" y="{76 + i * 19}" class="t" font-size="13.5">{esc(ln)}</text>')
+        s.append(f'<text x="42" y="{86 + i * 18}" class="t" font-size="13">{esc(ln)}</text>')
     s.append(f'<line x1="26" y1="{H - 44}" x2="{W - 10}" y2="{H - 44}" stroke="{INK}" stroke-width="1" stroke-dasharray="2 3" opacity=".55"/>')
     s.append(f'<text x="42" y="{H - 21}" class="b" font-size="12" letter-spacing="1.2">{esc(lang)}</text>')
     s.append(f'<text x="{W - 26}" y="{H - 21}" class="b" font-size="12" letter-spacing="1.2" text-anchor="end">★ {stars}  ·  {upd}</text>')
@@ -416,16 +505,157 @@ def tile(name: str, desc: str, repo: dict, idx: int) -> str:
     return "\n".join(s)
 
 
+# ── panels: stack (discovered) and notes (owner's words) ────────────────
+def _svg_open(W: int, H: int, label: str, text: str) -> list[str]:
+    style = (font_face("JBM", "JetBrainsMono-Regular.ttf", text)
+             + font_face("JBMB", "JetBrainsMono-Bold.ttf", text)
+             + font_face("JBMX", "JetBrainsMono-ExtraBold.ttf", text))
+    return [f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" role="img" aria-label="{esc(label)}">',
+            f"<title>{esc(label)}</title>",
+            "<style>" + style + f".t{{font-family:JBM,monospace;fill:{INK}}}.b{{font-family:JBMB,monospace;fill:{INK}}}.x{{font-family:JBMX,monospace;fill:{INK}}}.soft{{fill:{INK_SOFT}}}</style>",
+            f'<rect width="{W}" height="{H}" rx="12" fill="{PAPER}"/>',
+            f'<rect x="10" y="10" width="{W - 20}" height="{H - 20}" fill="none" stroke="{INK}" stroke-width="1.5"/>']
+
+
+def _chips(items: list[str], x0: float, y: float, x1: float, size: float = 12.5, gap: float = 8):
+    """Lay out inked chips left to right, wrapping. Returns (svg parts, bottom y)."""
+    out, x = [], x0
+    cw = size * 0.6
+    h = size + 12
+    for it in items:
+        w = len(it) * cw + 18
+        if x + w > x1:
+            x = x0
+            y += h + gap
+        out.append(f'<rect x="{x:.1f}" y="{y}" width="{w:.1f}" height="{h}" fill="none" stroke="{INK}" stroke-width="1.3"/>')
+        out.append(f'<text x="{x + 9:.1f}" y="{y + h - 8}" class="b" font-size="{size}">{esc(it)}</text>')
+        x += w + gap
+    return out, y + h
+
+
+def stack_card(data: dict) -> str:
+    W = 960
+    langs = data["langs"]
+    tools = [t for t, _ in data["tools"]]
+    top = max((n for _, n in langs), default=1)
+    rows = len(langs)
+    text = "STACK//LANGUAGESTOOLSDETECTEDFROMPUBLICREPOSREPOSOF0123456789·" + "".join(k for k, _ in langs) + "".join(tools)
+    # tools block height estimate
+    tool_lines = 1
+    x = 0
+    for t in tools:
+        w = len(t) * 7.5 + 26
+        if x + w > W - 68:
+            tool_lines += 1
+            x = 0
+        x += w
+    H = 116 + rows * 26 + 32 + tool_lines * 33 + 20
+    s = _svg_open(W, H, "Stack", text)
+    s.append(f'<text x="34" y="46" class="x" font-size="20" letter-spacing="1">STACK //</text>')
+    s.append(f'<rect x="146" y="32" width="11" height="11" fill="{PUMPKIN}"/>')
+    s.append(f'<text x="{W - 34}" y="45" class="b soft" font-size="11.5" letter-spacing="1.3" text-anchor="end">DETECTED FROM {len(data["repos_list"])} PUBLIC REPOS</text>')
+    s.append(f'<line x1="10" y1="64" x2="{W - 10}" y2="64" stroke="{INK}" stroke-width="1.5"/>')
+    s.append(f'<text x="34" y="90" class="b soft" font-size="11.5" letter-spacing="1.3">LANGUAGES</text>')
+    s.append(f'<text x="{W - 34}" y="90" class="b soft" font-size="11.5" letter-spacing="1.3" text-anchor="end">REPOS</text>')
+    bx0, bx1 = 250, W - 90
+    for i, (k, n) in enumerate(langs):
+        y = 116 + i * 26
+        s.append(f'<text x="34" y="{y}" class="b" font-size="13.5">{esc(k)}</text>')
+        cells = 56
+        filled = max(1, round(n / top * cells))
+        cw = (bx1 - bx0) / cells
+        for c in range(cells):
+            if c < filled:
+                s.append(f'<rect x="{bx0 + c * cw:.1f}" y="{y - 11}" width="{cw - 2.5:.1f}" height="12" fill="{PUMPKIN if i == 0 else INK}"/>')
+            elif c % 2 == 0:
+                s.append(f'<rect x="{bx0 + c * cw + cw / 2 - 1.5:.1f}" y="{y - 6.5}" width="2.5" height="2.5" fill="{INK}" opacity=".35"/>')
+        s.append(f'<text x="{W - 34}" y="{y}" class="x" font-size="13.5" text-anchor="end">{n}</text>')
+    ty = 116 + rows * 26 + 8
+    s.append(f'<line x1="34" y1="{ty - 14}" x2="{W - 34}" y2="{ty - 14}" stroke="{INK}" stroke-width="1" stroke-dasharray="2 3" opacity=".55"/>')
+    s.append(f'<text x="34" y="{ty + 12}" class="b soft" font-size="11.5" letter-spacing="1.3">TOOLS</text>')
+    chips, _ = _chips(tools, 34, ty + 24, W - 34)
+    s += chips
+    s.append("</svg>")
+    return "\n".join(s)
+
+
+def notes_card() -> str:
+    W = 960
+    cols = [("NOW", NOW), ("OFFLINE", OFFLINE)]
+    text = "NOW//OFFLINE//" + "".join(k + "".join(v) for _, g in cols for k, v in g) + PROFILE["tagline"] + "·>"
+    rows_h = max(sum(1 + (1 if v else 0) for _, v in g) for _, g in cols)
+    H = 74 + rows_h * 30 + 70
+    s = _svg_open(W, H, "Now and offline", text)
+    mid = W / 2
+    s.append(f'<line x1="{mid}" y1="10" x2="{mid}" y2="{H - 56}" stroke="{INK}" stroke-width="1.5"/>')
+    s.append(f'<line x1="10" y1="{H - 56}" x2="{W - 10}" y2="{H - 56}" stroke="{INK}" stroke-width="1.5"/>')
+    for ci, (title, group) in enumerate(cols):
+        x0 = 34 + ci * mid
+        s.append(f'<text x="{x0}" y="46" class="x" font-size="20" letter-spacing="1">{title} //</text>')
+        y = 86
+        for k, vals in group:
+            s.append(f'<rect x="{x0}" y="{y - 10}" width="8" height="8" fill="{PUMPKIN if ci == 0 else INK}"/>')
+            s.append(f'<text x="{x0 + 18}" y="{y}" class="b" font-size="13" letter-spacing="1.3">{esc(k)}</text>')
+            y += 30
+            if vals:
+                s.append(f'<text x="{x0 + 18}" y="{y - 6}" class="t" font-size="13.5">{esc(" · ".join(vals))}</text>')
+                y += 30
+    s.append(f'<text x="34" y="{H - 26}" class="t" font-size="13.5">&gt; {esc(PROFILE["tagline"])}</text>')
+    s.append("</svg>")
+    return "\n".join(s)
+
+
+def readme(data: dict) -> str:
+    cells = []
+    for r in data["repos_list"]:
+        n = r["name"]
+        cells.append(f'<td width="50%"><a href="https://github.com/{USER}/{n}"><img src="assets/projects/{n}.svg" width="100%" alt="{esc(n)}"></a></td>')
+    rows = []
+    for i in range(0, len(cells), 2):
+        pair = cells[i:i + 2]
+        if len(pair) == 1:
+            pair.append('<td width="50%"></td>')
+        rows.append("  <tr>\n    " + "\n    ".join(pair) + "\n  </tr>")
+    own = sum(1 for r in data["repos_list"] if not r.get("fork"))
+    forks = len(data["repos_list"]) - own
+    return f"""<!-- generated by scripts/build.py; edit PROFILE / NOW / OFFLINE there, not here -->
+<a href="https://github.com/{USER}">
+  <img src="assets/card.svg" width="100%" alt="{USER}: CS student. Always building things, breaking things and learning. Repos, stars, yearly contributions and a 52-week activity chart.">
+</a>
+
+<img src="assets/stack.svg" width="100%" alt="Languages and tools detected from public repositories: {esc(', '.join(k for k, _ in data['langs']))}.">
+
+<img src="assets/notes.svg" width="100%" alt="Now: building new projects; reading about programming, programming languages, tools and Linux. Offline: video games, books (programming, classic literature), learning English.">
+
+### Repositories
+
+<sub>{own} original · {forks} forks · originals first, newest push first</sub>
+
+<table>
+{chr(10).join(rows)}
+</table>
+
+<sub>Everything above is generated by <a href="scripts/build.py"><code>scripts/build.py</code></a> from live GitHub data and refreshed every hour, so new repositories and forks show up on their own. Font: JetBrains Mono (OFL).</sub>
+"""
+
+
 def main() -> None:
     data = fetch()
     (ASSETS / "card.svg").write_text(card(data))
+    (ASSETS / "stack.svg").write_text(stack_card(data))
+    (ASSETS / "notes.svg").write_text(notes_card())
     pdir = ASSETS / "projects"
     pdir.mkdir(exist_ok=True)
-    for i, (name, desc) in enumerate(FEATURED.items()):
-        repo = data["repo_map"].get(name)
-        if repo:
-            (pdir / f"{name}.svg").write_text(tile(name, desc, repo, i))
-    print("ok", data["repos"], data["stars"], data["contrib"])
+    keep = set()
+    for i, repo in enumerate(data["repos_list"]):
+        f = pdir / f"{repo['name']}.svg"
+        f.write_text(tile(repo, i))
+        keep.add(f.name)
+    for f in pdir.glob("*.svg"):
+        if f.name not in keep:
+            f.unlink()  # repo deleted or made private
+    (ROOT / "README.md").write_text(readme(data))
+    print("ok", len(data["repos_list"]), "repos", [k for k, _ in data["langs"]], [t for t, _ in data["tools"]])
 
 
 if __name__ == "__main__":
