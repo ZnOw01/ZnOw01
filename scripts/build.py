@@ -2,7 +2,7 @@
 """Generate the profile README cards from live GitHub data.
 
 Outputs:
-  assets/card.svg            dossier header (dithered + ASCII portrait, stats, activity)
+  assets/card.svg            dossier header (profile photo, stats, activity)
   assets/projects/<repo>.svg one tile per featured project
 
 Needs GITHUB_TOKEN (or GH_TOKEN) in the environment. Pillow + fonttools[woff].
@@ -21,7 +21,7 @@ from pathlib import Path
 
 from fontTools import subset
 from fontTools.ttLib import TTFont
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageStat
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "assets"
@@ -78,7 +78,6 @@ BAYER8 = [
     [10, 58, 6, 54, 9, 57, 5, 53],
     [42, 26, 38, 22, 41, 25, 37, 21],
 ]
-RAMP = " .:-=+*#%@"
 
 
 # ── data ─────────────────────────────────────────────────────────────────
@@ -132,7 +131,7 @@ def fetch() -> dict:
         "name": user.get("name") or USER,
         "bio": (user.get("bio") or "").strip(),
         "avatar": user["avatar_url"],
-        "repos": user["public_repos"],
+        "repos": 0,  # set below from the grid so both numbers agree
         "followers": user["followers"],
         "stars": sum(r["stargazers_count"] for r in repos),
         "contrib": cal["totalContributions"],
@@ -188,7 +187,9 @@ def font_face(family: str, file: str, text: str) -> str:
     opts = subset.Options()
     opts.flavor = "woff2"
     opts.layout_features = ["kern"]
-    f = TTFont(FONTS / file)
+    # recalcTimestamp=False: identical text gives byte-identical output, so the
+    # hourly workflow only commits when something real changed
+    f = TTFont(FONTS / file, recalcTimestamp=False)
     s = subset.Subsetter(opts)
     s.populate(text=text + " ")
     s.subset(f)
@@ -204,13 +205,8 @@ def esc(s: str) -> str:
 
 
 # ── portrait ─────────────────────────────────────────────────────────────
-# Source: assets/portrait.(png|jpg|jpeg|webp) if present, else the live GitHub
-# avatar. Prep is image-agnostic: centre square crop, auto levels and an
-# adaptive gamma that pushes mean brightness to a fixed target, so any photo
-# lands in the same tonal range before dithering.
-PORTRAIT_STYLE = "atkinson"   # "atkinson" | "glyphs" | "band"
-
-
+# The photo is shown as-is: the live GitHub avatar, or assets/portrait.* if
+# present. Only a centre square crop and a resize to fit the frame are applied.
 def _portrait_source(avatar_url: str) -> Image.Image:
     for ext in ("png", "jpg", "jpeg", "webp"):
         f = ASSETS / f"portrait.{ext}"
@@ -218,93 +214,23 @@ def _portrait_source(avatar_url: str) -> Image.Image:
             return Image.open(f)
     cache = ASSETS / "avatar.jpg"
     try:
-        with urllib.request.urlopen(avatar_url + "&s=460", timeout=30) as r:
+        with urllib.request.urlopen(avatar_url + "&s=760", timeout=30) as r:
             cache.write_bytes(r.read())
     except Exception:
         pass  # keep the cached copy
     return Image.open(cache)
 
 
-def _prep(im: Image.Image, n: int) -> Image.Image:
-    import math
-    if im.mode in ("RGBA", "LA", "P"):
-        im = im.convert("RGBA")
-        bg = Image.new("RGBA", im.size, (255, 255, 255, 255))
-        im = Image.alpha_composite(bg, im)
-    im = im.convert("L")
+def portrait(avatar_url: str, size: int = 380, scale: int = 2) -> str:
+    im = _portrait_source(avatar_url).convert("RGB")
     w, h = im.size
     s = min(w, h)
     im = im.crop(((w - s) // 2, (h - s) // 2, (w + s) // 2, (h + s) // 2))
-    im = ImageOps.autocontrast(im, cutoff=1)
-    mean = ImageStat.Stat(im).mean[0] / 255
-    g = math.log(0.62) / math.log(max(0.05, min(0.95, mean)))
-    im = im.point([int(255 * ((i / 255) ** g)) for i in range(256)])
-    im = im.filter(ImageFilter.UnsharpMask(radius=2, percent=140, threshold=2))
-    return im.resize((n, n), Image.LANCZOS)
-
-
-def _atkinson(g: Image.Image) -> list[list[bool]]:
-    n = g.size[0]
-    a = [[float(g.getpixel((x, y))) for x in range(n)] for y in range(n)]
-    ink = [[False] * n for _ in range(n)]
-    for y in range(n):
-        for x in range(n):
-            old = a[y][x]
-            new = 0.0 if old < 128 else 255.0
-            ink[y][x] = new == 0
-            e = (old - new) / 8
-            for dx, dy in ((1, 0), (2, 0), (-1, 1), (0, 1), (1, 1), (0, 2)):
-                X, Y = x + dx, y + dy
-                if 0 <= X < n and Y < n:
-                    a[Y][X] += e
-    return ink
-
-
-def portrait(avatar_url: str, size: int = 380, scale: int = 2) -> str:
-    W = size * scale
-    ink = (0x12, 0x1A, 0x18)
-    paper = (0xB7, 0xD8, 0xCD)
-    raw = _portrait_source(avatar_url)
-    out = Image.new("RGB", (W, W), paper)
-    d = ImageDraw.Draw(out)
-
-    cell = 5 * scale // 2            # 5px dither dot at 2x
-    n = W // cell
-    dots = _atkinson(_prep(raw, n))
-    for y in range(n):
-        for x in range(n):
-            if dots[y][x]:
-                d.rectangle([x * cell, y * cell, (x + 1) * cell - 1, (y + 1) * cell - 1], fill=ink)
-
-    if PORTRAIT_STYLE in ("glyphs", "band"):
-        ach = 12 * scale // 2 if PORTRAIT_STYLE == "glyphs" else 14 * scale // 2
-        m = W // ach
-        g = _prep(raw, m).load()
-        font = ImageFont.truetype(str(FONTS / "JetBrainsMono-ExtraBold.ttf"), int(ach * 1.1))
-        rng = random.Random(USER)
-        edge = int(m * 0.22)
-        for r in range(m):
-            if PORTRAIT_STYLE == "glyphs":
-                # solid shadow masses are carved into characters
-                for c in range(m):
-                    v = 1 - g[c, r] / 255
-                    if v > 0.66:
-                        x0, y0 = c * ach, r * ach
-                        d.rectangle([x0, y0, x0 + ach - 1, y0 + ach - 1], fill=ink)
-                        d.text((x0 + ach / 2, y0 + ach / 2), "+*#%"[min(3, int((v - .66) / .34 * 4))],
-                               font=font, fill=paper, anchor="mm")
-            else:
-                # a ragged band on the left dissolves into ASCII
-                edge = max(int(m * 0.12), min(int(m * 0.30), edge + rng.choice((-1, 0, 0, 1))))
-                d.rectangle([0, r * ach, edge * ach - 1, (r + 1) * ach - 1], fill=paper)
-                for c in range(edge):
-                    ch = RAMP[min(len(RAMP) - 1, int((1 - g[c, r] / 255) * len(RAMP)))]
-                    if ch != " ":
-                        d.text((c * ach + ach / 2, r * ach + ach / 2), ch, font=font, fill=ink, anchor="mm")
-
-    out = out.quantize(colors=4)
+    side = min(s, size * scale)
+    if side != s:
+        im = im.resize((side, side), Image.LANCZOS)
     buf = io.BytesIO()
-    out.save(buf, "PNG", optimize=True)
+    im.save(buf, "JPEG", quality=90, optimize=True)
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -382,11 +308,9 @@ def card(data: dict) -> str:
       .soft{{fill:{INK_SOFT}}}
       .ln{{stroke:{INK};stroke-width:1.5;fill:none}}
       .hair{{stroke:{INK};stroke-width:1;stroke-dasharray:2 3;opacity:.55}}
-      @keyframes scan{{0%{{transform:translateY(0)}}100%{{transform:translateY({PH - 6}px)}}}}
-      .scan{{animation:scan 5.5s cubic-bezier(.6,0,.4,1) infinite alternate}}
       @keyframes blink{{0%,49%{{opacity:1}}50%,100%{{opacity:0}}}}
       .cur{{animation:blink 1.1s steps(1) infinite}}
-      @media (prefers-reduced-motion:reduce){{.scan,.cur{{animation:none}}}}
+      @media (prefers-reduced-motion:reduce){{.cur{{animation:none}}}}
     </style>""")
 
     a(f'<rect width="{W}" height="{H}" rx="14" fill="{PAPER}"/>')
@@ -415,14 +339,8 @@ def card(data: dict) -> str:
         a(f'<rect x="{W - P - 76 + i * 20}" y="{P + 17}" width="12" height="12" fill="{fill}" stroke="{INK}" stroke-width="1.5"/>')
 
     # portrait
-    a(f'<image x="{PX0}" y="{TOP}" width="{PH}" height="{PH}" preserveAspectRatio="none" style="image-rendering:pixelated" href="data:image/png;base64,{img}"/>')
-    a(f'<g class="scan"><rect x="{PX0}" y="{TOP + 2}" width="{PH}" height="3" fill="{PUMPKIN}" opacity=".85"/></g>')
+    a(f'<image x="{PX0}" y="{TOP}" width="{PH}" height="{PH}" preserveAspectRatio="xMidYMid slice" href="data:image/jpeg;base64,{img}"/>')
     a(f'<rect x="{PX0}" y="{TOP}" width="{PH}" height="{PH}" class="ln"/>')
-    # corner brackets
-    for (cx, cy, dx, dy) in [(PX0 + 12, TOP + 12, 1, 1), (PX1 - 12, TOP + 12, -1, 1), (PX0 + 12, BOT - 12, 1, -1), (PX1 - 12, BOT - 12, -1, -1)]:
-        a(f'<path d="M{cx} {cy + 18 * dy}V{cy}H{cx + 18 * dx}" stroke="{PAPER}" stroke-width="5" fill="none"/>')
-        a(f'<path d="M{cx} {cy + 18 * dy}V{cy}H{cx + 18 * dx}" class="ln" stroke-width="2"/>')
-
     # data rows
     row_h = 38
     y0 = TOP
@@ -674,6 +592,7 @@ def readme(data: dict) -> str:
 
 def main() -> None:
     data = fetch()
+    data["repos"] = len(data["repos_list"])
     (ASSETS / "card.svg").write_text(card(data))
     (ASSETS / "stack.svg").write_text(stack_card(data))
     (ASSETS / "notes.svg").write_text(notes_card())
