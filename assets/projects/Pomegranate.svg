@@ -10,5 +10,5 @@
 <text x="42" y="86" class="t" font-size="13">VERY experimental Nintendo Switch 2 emulator</text>
 <line x1="26" y1="124" x2="450" y2="124" stroke="#121A18" stroke-width="1" stroke-dasharray="2 3" opacity=".55"/>
 <text x="42" y="147" class="b" font-size="12" letter-spacing="1.2">C++ · KOTLIN</text>
-<text x="434" y="147" class="b" font-size="12" letter-spacing="1.2" text-anchor="end">★ 2  ·  2D AGO</text>
+<text x="434" y="147" class="b" font-size="12" letter-spacing="1.2" text-anchor="end">★ 2  ·  3D AGO</text>
 </svg>
