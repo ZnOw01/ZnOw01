@@ -17,8 +17,8 @@
     <td width="50%"><a href="https://github.com/ZnOw01/Veilleuse"><img src="assets/projects/Veilleuse.svg" width="100%" alt="Veilleuse"></a></td>
   </tr>
   <tr>
-    <td width="50%"><a href="https://github.com/ZnOw01/Primrose"><img src="assets/projects/Primrose.svg" width="100%" alt="Primrose"></a></td>
     <td width="50%"><a href="https://github.com/ZnOw01/SnowBooks"><img src="assets/projects/SnowBooks.svg" width="100%" alt="SnowBooks"></a></td>
+    <td width="50%"><a href="https://github.com/ZnOw01/Primrose"><img src="assets/projects/Primrose.svg" width="100%" alt="Primrose"></a></td>
   </tr>
   <tr>
     <td width="50%"><a href="https://github.com/ZnOw01/Pomegranate"><img src="assets/projects/Pomegranate.svg" width="100%" alt="Pomegranate"></a></td>
